@@ -16,42 +16,50 @@ const storeData = {
 
 // Automated Spreadsheet Database Pipeline Fetcher
 async function fetchCloudInventory() {
-    const url = `https://google.com{GOOGLE_SHEET_ID}/gviz/tq?tqx=out:json`;
+    // Upgraded CSV endpoint structure that safely bypasses Google's modern layout blocks
+    const url = `https://google.com{GOOGLE_SHEET_ID}/gviz/tq?tqx=out:csv`;
     try {
         const res = await fetch(url);
         const text = await res.text();
-        const jsonString = text.substring(text.indexOf("{"), text.lastIndexOf("}") + 1);
-        const json = JSON.parse(jsonString);
-        if (json.table && json.table.rows) { processSpreadsheetRows(json.table); }
+        parseCSVData(text);
     } catch (err) { console.error("Spreadsheet Data Connection Loss:", err); }
 }
 
-function processSpreadsheetRows(table) {
+function parseCSVData(csvText) {
     Object.keys(storeData).forEach(cat => storeData[cat].items = []);
     
-    const headers = table.cols.map(col => col.label ? col.label.trim() : "");
-    
-    table.rows.forEach(row => {
+    // Split spreadsheet strings by row breaks cleanly
+    const lines = csvText.split(/\r?\n/);
+    if (lines.length < 2) return;
+
+    // Clean up quote wrappers from column headers
+    const headers = lines[0].split(',').map(h => h.replace(/^"|"\$/g, '').trim());
+
+    for (let i = 1; i < lines.length; i++) {
+        if (!lines[i].trim()) continue;
+        
+        // Match columns safely while ignoring hidden commas inside product description boxes
+        const matches = lines[i].match(/(".*?"|[^",\s]+)(?=\s*,|\s*\$)/g) || lines[i].split(',');
         const item = {};
-        row.c.forEach((cell, index) => {
-            const headerName = headers[index];
-            if (headerName) {
-                item[headerName] = cell ? cell.v : "";
-            }
+        
+        headers.forEach((headerName, index) => {
+            let val = matches[index] ? matches[index].replace(/^"|"\$/g, '').trim() : "";
+            if (headerName) item[headerName] = val;
         });
 
-        const targetCategory = item.category ? String(item.category).toLowerCase().trim() : 'clothing';
+        if (!item.category) continue;
+        const targetCategory = item.category.toLowerCase().trim();
         
         let tagsArray = [];
         if (item.searchHashtags) {
-            tagsArray = String(item.searchHashtags).split(",").map(t => t.trim());
+            tagsArray = item.searchHashtags.split(',').map(t => t.trim());
         }
 
         if (storeData[targetCategory]) {
             storeData[targetCategory].items.push({
                 name: item.name || "Boutique Essential",
                 desc: item.desc || "",
-                price: Number(item.price || 0),
+                price: Number(item.price) || 0,
                 r1: item.filterProfile || "All",
                 r2: item.filterStyle || "All",
                 hash: tagsArray,
@@ -59,7 +67,7 @@ function processSpreadsheetRows(table) {
                 deal: String(item.isSpecialDeal).toUpperCase() === "TRUE"
             });
         }
-    });
+    }
 
     renderHomeDeals();
     if (currentActiveCategory) { renderCatalogItems(); }
@@ -187,22 +195,40 @@ function renderHomeDeals() {
                 </div>`;
         });
     });
-    if(!hasDeals) { target.innerHTML = '<p style="text-align:center; color:#888; width:100%;">Welcome! Any items added to your Google Sheet spreadsheet inventory marked as TRUE for Special Deal will display here automatically.</p>'; }
+    if (!hasDeals) {
+        target.innerHTML = '<p style="text-align:center; color:#888; width:100%;">Welcome! Any items added to your Google Sheet spreadsheet inventory marked as TRUE for Special Deal will display here automatically.</p>';
+    }
 }
 
 function openCatalog(categoryKey) {
-    currentActiveCategory = categoryKey; selectedRow1Tag = "All"; selectedRow2Tag = "All";
-    if(document.getElementById('catalogSearch')) document.getElementById('catalogSearch').value = "";
+    currentActiveCategory = categoryKey;
+    selectedRow1Tag = "All";
+    selectedRow2Tag = "All";
+    
+    if (document.getElementById('catalogSearch')) {
+        document.getElementById('catalogSearch').value = "";
+    }
+    
     updateDropdownDots();
-document.getElementById('category-title').innerText = storeData[categoryKey].title;
+    document.getElementById('category-title').innerText = storeData[categoryKey].title;
     document.getElementById('category-subtitle').innerText = storeData[categoryKey].subtitle;
-    buildFilterBar(); renderCatalogItems(); navigateTo('catalog');
+    buildFilterBar();
+    renderCatalogItems();
+    navigateTo('catalog');
 }
+
 window.onclick = function(e) {
     if (!e.target.matches('.three-dots-btn')) {
         const dropdowns = document.getElementsByClassName("dropdown-content");
-        for (let i = 0; i < dropdowns.length; i++) { if (dropdowns[i].classList.contains('show')) 
-                                                    dropdowns[i].classList.remove('show'); }
+        for (let i = 0; i < dropdowns.length; i++) {
+            if (dropdowns[i].classList.contains('show')) {
+                dropdowns[i].classList.remove('show');
+            }
+        }
     }
 }
-window.onload = function() { fetchCloudInventory(); renderHomeDeals(); };
+
+window.onload = function() {
+    fetchCloudInventory();
+    renderHomeDeals();
+};
