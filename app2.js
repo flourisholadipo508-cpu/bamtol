@@ -4,9 +4,8 @@ let selectedRow2Tag = "All";
 let activeCurrency = "NGN";
 const usdRate = 1500;
 
-// --- ⚡ INSTANT CONTENTFUL DATABASE PIPELINE CONTROLS ---
-const SPACE_ID = "pcxjqx2p5oqh";
-const ACCESS_TOKEN = "MIy89CjGo6KQGx9iezs_DquLi47xfZJPKWs85Ng8IR0";
+// --- 📊 INSTANT GOOGLE SHEETS LIVE INVENTORY CONFIG ---
+const GOOGLE_SHEET_ID = "1BrZXWnF7sqxUuUmTpFEFr20SmGn-GH2iJlUDHIkMqZY";
 
 const storeData = {
     clothing: { title: "Premium Clothing", subtitle: "Luxury outer layers and tailored silhouettes.", row1: ["All", "Men", "Women", "Kids"], row2: ["All", "Formal", "Casual", "Sport", "Native", "Undergarment"], items: [] },
@@ -15,87 +14,53 @@ const storeData = {
     jewelry: { title: "Fine Jewelry", subtitle: "Exquisite investment statement pieces.", row1: ["All"], row2: ["All", "Whole Sets", "Watches", "Necklaces", "Rings", "Bracelets"], items: [] }
 };
 
-// Automated Cloud Pipeline Fetcher
+// Automated Spreadsheet Database Pipeline Fetcher
 async function fetchCloudInventory() {
-    const url = `https://contentful.com{SPACE_ID}/environments/master/entries?access_token=${ACCESS_TOKEN}&content_type=boutiqueItem&include=2`;
+    const url = `https://google.com{GOOGLE_SHEET_ID}/gviz/tq?tqx=out:json`;
     try {
         const res = await fetch(url);
-        const json = await res.json();
-        if (json.items) { processContentfulData(json); }
-    } catch (err) { console.error("Cloud Connection Error:", err); }
+        const text = await res.text();
+        const jsonString = text.substring(text.indexOf("{"), text.lastIndexOf("}") + 1);
+        const json = JSON.parse(jsonString);
+        if (json.table && json.table.rows) { processSpreadsheetRows(json.table); }
+    } catch (err) { console.error("Spreadsheet Data Connection Loss:", err); }
 }
 
-function processContentfulData(data) {
+function processSpreadsheetRows(table) {
     Object.keys(storeData).forEach(cat => storeData[cat].items = []);
     
-    // Create image dictionary lookup map
-    const mediaMap = {};
-    if (data.includes && data.includes.Asset) {
-        data.includes.Asset.forEach(asset => {
-            if (asset.fields && asset.fields.file) {
-                let fileObj = asset.fields.file;
-                let fileUrl = "";
-                
-                // Safely handle localized or flat image url paths
-                if (typeof fileObj === 'string') { fileUrl = fileObj; }
-                else if (fileObj.url) { fileUrl = fileObj.url; }
-                else { for (let key in fileObj) { if (fileObj[key] && fileObj[key].url) fileUrl = fileObj[key].url; } }
-                
-                if (fileUrl) {
-                    if (!fileUrl.startsWith("https:")) fileUrl = "https:" + fileUrl;
-                    mediaMap[asset.sys.id] = fileUrl;
-                }
+    const headers = table.cols.map(col => col.label ? col.label.trim() : "");
+    
+    table.rows.forEach(row => {
+        const item = {};
+        row.c.forEach((cell, index) => {
+            const headerName = headers[index];
+            if (headerName) {
+                item[headerName] = cell ? cell.v : "";
             }
         });
-    }
 
-    data.items.forEach(entry => {
-        const rawFields = entry.fields;
-        if (!rawFields) return;
-
-        // 🌟 AUTOMATIC UNWRAPPER: Converts {"en-US": "value"} into flat "value" fields
-        const fields = {};
-        for (let key in rawFields) {
-            let val = rawFields[key];
-            if (val !== null && typeof val === 'object' && !Array.isArray(val) && !(val.sys)) {
-                let localeKeys = Object.keys(val);
-                fields[key] = localeKeys.length > 0 ? val[localeKeys[0]] : val;
-            } else {
-                fields[key] = val;
-            }
-        }
-
-        // Standardize category and tag names to all lowercase strings
-        const targetCategory = fields.category ? String(fields.category).toLowerCase().trim() : 'clothing';
+        const targetCategory = item.category ? String(item.category).toLowerCase().trim() : 'clothing';
         
-        let imageUrl = "gii.png";
-        if (fields.productImage) {
-            let assetId = "";
-            if (fields.productImage.sys) {
-                assetId = fields.productImage.sys.id;
-            } else if (typeof fields.productImage === 'object') {
-                let localeKey = Object.keys(fields.productImage);
-                if (fields.productImage[localeKey] && fields.productImage[localeKey].sys) {
-                    assetId = fields.productImage[localeKey].sys.id;
-                }
-            }
-            if (assetId && mediaMap[assetId]) imageUrl = mediaMap[assetId];
+        let tagsArray = [];
+        if (item.searchHashtags) {
+            tagsArray = String(item.searchHashtags).split(",").map(t => t.trim());
         }
 
         if (storeData[targetCategory]) {
             storeData[targetCategory].items.push({
-                name: fields.name || "Boutique Essential",
-                desc: fields.desc || "",
-                price: Number(fields.price || 0),
-                r1: fields.filterProfile || "All",
-                r2: fields.filterStyle || "All",
-                hash: Array.isArray(fields.searchHashtags) ? fields.searchHashtags : [],
-                imageFile: imageUrl,
-                deal: fields.isSpecialDeal === true || fields.isSpecialDeal === "true"
+                name: item.name || "Boutique Essential",
+                desc: item.desc || "",
+                price: Number(item.price || 0),
+                r1: item.filterProfile || "All",
+                r2: item.filterStyle || "All",
+                hash: tagsArray,
+                imageFile: item.imageFile || "gii.png",
+                deal: String(item.isSpecialDeal).toUpperCase() === "TRUE"
             });
         }
     });
-    
+
     renderHomeDeals();
     if (currentActiveCategory) { renderCatalogItems(); }
 }
@@ -172,7 +137,7 @@ function renderCatalogItems() {
     const data = storeData[currentActiveCategory];
 
     if(!data.items || data.items.length === 0) {
-        grid.innerHTML = '<p style="text-align:center; color:#888; width:100%; padding:40px;">No items found in this section yet. Open Contentful to upload stock items!</p>';
+        grid.innerHTML = '<p style="text-align:center; color:#888; width:100%; padding:40px;">No items found in this section yet. Add stock items directly into your Google Sheet inventory!</p>';
         return;
     }
 
@@ -207,57 +172,37 @@ function renderHomeDeals() {
     let hasDeals = false;
     Object.keys(storeData).forEach(cat => {
         storeData[cat].items.forEach(item => {
-            if (!item.deal) return;
-            hasDeals = true;
+            if (!item.deal) return; hasDeals = true;
             const combinedHash = item.hash.join(' ');
             const waText = encodeURIComponent(`Hello Bamtol World! I saw this Special Deal on your Homepage: ${item.name} (${formatPrice(item.price)}). Is it available?`);
-            
             target.innerHTML += `
-                <div class="product-card"> 
-                    <button class="share-card-btn" onclick="shareProduct('${item.name}', '${combinedHash}')">🔗</button> 
-                    <img src="${item.imageFile}" class="product-img" onerror="this.src='gii.png'"> 
-                    <div class="product-info"> 
-                        <h3 class="product-title">${item.name}</h3>
-                        <p class="product-desc">${item.desc}</p> 
-                        <p class="product-price" style="background-color:#d4af37; color:#111;">${formatPrice(item.price)}</p> 
-                    </div> 
-                    <a href="https://wa.me{waText}" target="_blank" class="order-whatsapp-btn">Claim Deal on WhatsApp</a> 
+                <div class="product-card">
+                    <button class="share-card-btn" onclick="shareProduct('${item.name}', '${combinedHash}')">🔗</button>
+                    <img src="${item.imageFile}" class="product-img" onerror="this.src='gii.png'">
+                    <div class="product-info">
+                        <h3 class="product-title">${item.name}</h3><p class="product-desc">${item.desc}</p>
+                        <p class="product-price" style="background-color:#d4af37; color:#111;">${formatPrice(item.price)}</p>
+                    </div>
+                    <a href="https://wa.me{waText}" target="_blank" class="order-whatsapp-btn">Claim Deal on WhatsApp</a>
                 </div>`;
         });
     });
-
-    if (!hasDeals) { 
-        target.innerHTML = '<p style="text-align:center; color:#888; width:100%;">Welcome! Any items uploaded in Contentful with Special Deal set to True will display here automatically.</p>'; 
-    } 
+    if(!hasDeals) { target.innerHTML = '<p style="text-align:center; color:#888; width:100%;">Welcome! Any items added to your Google Sheet spreadsheet inventory marked as TRUE for Special Deal will display here automatically.</p>'; }
 }
 
 function openCatalog(categoryKey) {
-    currentActiveCategory = categoryKey; 
-    selectedRow1Tag = "All"; 
-    selectedRow2Tag = "All";
-    if (document.getElementById('catalogSearch')) {
-        document.getElementById('catalogSearch').value = "";
-    }
+    currentActiveCategory = categoryKey; selectedRow1Tag = "All"; selectedRow2Tag = "All";
+    if(document.getElementById('catalogSearch')) document.getElementById('catalogSearch').value = "";
     updateDropdownDots();
-    document.getElementById('category-title').innerText = storeData[categoryKey].title;
+document.getElementById('category-title').innerText = storeData[categoryKey].title;
     document.getElementById('category-subtitle').innerText = storeData[categoryKey].subtitle;
-    buildFilterBar(); 
-    renderCatalogItems(); 
-    navigateTo('catalog');
+    buildFilterBar(); renderCatalogItems(); navigateTo('catalog');
 }
-
 window.onclick = function(e) {
     if (!e.target.matches('.three-dots-btn')) {
         const dropdowns = document.getElementsByClassName("dropdown-content");
-        for (let i = 0; i < dropdowns.length; i++) { 
-            if (dropdowns[i].classList.contains('show')) {
-                dropdowns[i].classList.remove('show'); 
-            }
-        }
+        for (let i = 0; i < dropdowns.length; i++) { if (dropdowns[i].classList.contains('show')) 
+                                                    dropdowns[i].classList.remove('show'); }
     }
 }
-
-window.onload = function() { 
-    fetchCloudInventory(); 
-    renderHomeDeals(); 
-};
+window.onload = function() { fetchCloudInventory(); renderHomeDeals(); };
