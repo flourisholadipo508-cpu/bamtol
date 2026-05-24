@@ -27,28 +27,71 @@ async function fetchCloudInventory() {
 
 function processContentfulData(data) {
     Object.keys(storeData).forEach(cat => storeData[cat].items = []);
+    
     const mediaMap = {};
     if (data.includes && data.includes.Asset) {
         data.includes.Asset.forEach(asset => {
-            if(asset.fields && asset.fields.file) { mediaMap[asset.sys.id] = "https:" + asset.fields.file.url; }
+            if(asset.fields && asset.fields.file) {
+                // Safely extracts the media URL layer matching any localization setting
+                let fileObj = asset.fields.file;
+                let fileUrl = "";
+                if (typeof fileObj === 'string') { fileUrl = fileObj; }
+                else if (fileObj && fileObj.url) { fileUrl = fileObj.url; }
+                else { for (let key in fileObj) { if (fileObj[key] && fileObj[key].url) fileUrl = fileObj[key].url; } }
+                
+                if (fileUrl) {
+                    if (!fileUrl.startsWith("https:")) fileUrl = "https:" + fileUrl;
+                    mediaMap[asset.sys.id] = fileUrl;
+                }
+            }
         });
     }
+
     data.items.forEach(entry => {
-        const fields = entry.fields;
-        if(!fields) return;
-        const targetCategory = fields.category ? fields.category.toLowerCase().trim() : 'clothing';
-        let imageUrl = "gii.png";
-        if (fields.productImage && fields.productImage.sys) {
-            const assetId = fields.productImage.sys.id;
-            if (mediaMap[assetId]) imageUrl = mediaMap[assetId];
+        const rawFields = entry.fields;
+        if(!rawFields) return;
+
+        // FIXED: Extracts whichever data structure Contentful sends (Standard or Localized)
+        const fields = {};
+        for (let key in rawFields) {
+            if (rawFields[key] !== null && typeof rawFields[key] === 'object' && !Array.isArray(rawFields[key]) && !(rawFields[key].sys)) {
+                let keys = Object.keys(rawFields[key]);
+                fields[key] = keys.length > 0 ? rawFields[key][keys] : rawFields[key];
+            } else {
+                fields[key] = rawFields[key];
+            }
         }
+
+        // Standardize category matching rules
+        const targetCategory = fields.category ? fields.category.toLowerCase().trim() : 'clothing';
+        
+        let imageUrl = "gii.png";
+        if (fields.productImage) {
+            let assetId = "";
+            if (fields.productImage.sys) assetId = fields.productImage.sys.id;
+            else if (typeof fields.productImage === 'object') {
+                let localeKey = Object.keys(fields.productImage);
+                if (fields.productImage[localeKey] && fields.productImage[localeKey].sys) {
+                    assetId = fields.productImage[localeKey].sys.id;
+                }
+            }
+            if (assetId && mediaMap[assetId]) imageUrl = mediaMap[assetId];
+        }
+
         if (storeData[targetCategory]) {
             storeData[targetCategory].items.push({
-                name: fields.name || "Boutique Essential", desc: fields.desc || "", price: Number(fields.price || 0),
-                r1: fields.filterProfile || "All", r2: fields.filterStyle || "All", hash: fields.searchHashtags || [], imageFile: imageUrl, deal: fields.isSpecialDeal || false
+                name: fields.name || "Boutique Essential",
+                desc: fields.desc || "",
+                price: Number(fields.price || 0),
+                r1: fields.filterProfile || "All",
+                r2: fields.filterStyle || "All",
+                hash: Array.isArray(fields.searchHashtags) ? fields.searchHashtags : [],
+                imageFile: imageUrl,
+                deal: fields.isSpecialDeal === true || fields.isSpecialDeal === "true"
             });
         }
     });
+    
     renderHomeDeals();
     if (currentActiveCategory) { renderCatalogItems(); }
 }
@@ -114,6 +157,7 @@ function setFilter(row, val) {
     buildFilterBar(); renderCatalogItems();
 }
 
+// Fixed end rules to map search and windows initialization listeners flawlessly
 function handleSearch() { renderCatalogItems(); }
 function clearSearch() { document.getElementById('catalogSearch').value = ""; renderCatalogItems(); }
 function clickHash(tagText) { document.getElementById('catalogSearch').value = tagText; renderCatalogItems(); }
@@ -160,38 +204,53 @@ function renderHomeDeals() {
     let hasDeals = false;
     Object.keys(storeData).forEach(cat => {
         storeData[cat].items.forEach(item => {
-            if (!item.deal) return; hasDeals = true;
+            if (!item.deal) return;
+            hasDeals = true;
             const combinedHash = item.hash.join(' ');
             const waText = encodeURIComponent(`Hello Bamtol World! I saw this Special Deal on your Homepage: ${item.name} (${formatPrice(item.price)}). Is it available?`);
+            
             target.innerHTML += `
                 <div class="product-card">
                     <button class="share-card-btn" onclick="shareProduct('${item.name}', '${combinedHash}')">🔗</button>
                     <img src="${item.imageFile}" class="product-img" onerror="this.src='gii.png'">
                     <div class="product-info">
-                        <h3 class="product-title">${item.name}</h3><p class="product-desc">${item.desc}</p>
+                        <h3 class="product-title">${item.name}</h3>
+                        <p class="product-desc">${item.desc}</p>
                         <p class="product-price" style="background-color:#d4af37; color:#111;">${formatPrice(item.price)}</p>
                     </div>
                     <a href="https://wa.me{waText}" target="_blank" class="order-whatsapp-btn">Claim Deal on WhatsApp</a>
                 </div>`;
         });
     });
-    if(!hasDeals) { target.innerHTML = '<p style="text-align:center; color:#888; width:100%;">Welcome! Any items uploaded in Contentful with Special Deal set to True will display here automatically.</p>'; }
+
+    if (!hasDeals) {
+        target.innerHTML = '<p style="text-align:center; color:#888; width:100%;">Welcome! Any items uploaded in Contentful with Special Deal set to True will display here automatically.</p>';
+    }
 }
 
 function openCatalog(categoryKey) {
-    currentActiveCategory = categoryKey; selectedRow1Tag = "All"; selectedRow2Tag = "All";
-    if(document.getElementById('catalogSearch')) document.getElementById('catalogSearch').value = "";
+    currentActiveCategory = categoryKey;
+    selectedRow1Tag = "All";
+    selectedRow2Tag = "All";
+    if (document.getElementById('catalogSearch')) document.getElementById('catalogSearch').value = "";
     updateDropdownDots();
     document.getElementById('category-title').innerText = storeData[categoryKey].title;
     document.getElementById('category-subtitle').innerText = storeData[categoryKey].subtitle;
-    buildFilterBar(); renderCatalogItems(); navigateTo('catalog');
+    buildFilterBar();
+    renderCatalogItems();
+    navigateTo('catalog');
 }
 
 window.onclick = function(e) {
     if (!e.target.matches('.three-dots-btn')) {
         const dropdowns = document.getElementsByClassName("dropdown-content");
-        for (let i = 0; i < dropdowns.length; i++) { if (dropdowns[i].classList.contains('show'))
-            dropdowns[i].classList.remove('show'); }
+        for (let i = 0; i < dropdowns.length; i++) {
+            if (dropdowns[i].classList.contains('show')) dropdowns[i].classList.remove('show');
+        }
     }
 }
-window.onload = function() { fetchCloudInventory(); renderHomeDeals(); };
+
+window.onload = function() {
+    fetchCloudInventory();
+    renderHomeDeals();
+};
